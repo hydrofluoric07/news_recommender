@@ -53,8 +53,9 @@ def get_user_item_time_dict(click_df):
     user_item_time_df = click_df.groupby('user_id')[['click_article_id', 'click_timestamp']].apply(
         lambda x: make_item_time_pair(x)) \
         .reset_index().rename(columns={0: 'item_time_list'})
+    #     user_item_time_df = click_df.groupby('user_id')[['click_article_id', 'click_timestamp']].apply(make_item_time_pair).reset_index(name='item_time_list)
     user_item_time_dict = dict(zip(user_item_time_df['user_id'], user_item_time_df['item_time_list']))
-
+    # user_item_time_dict=click_df.groupby('user_id')[['click_article_id', 'click_timestamp']].apply(make_item_time_pair).to_dict()
     return user_item_time_dict
 
 
@@ -92,13 +93,14 @@ def get_hist_and_last_click(all_click):
 
 
 # 获取文章id对应的基本属性，并保存成字典的形式，方便后面召回阶段，冷启动阶段直接使用
-def get_item_info_dict(item_info_df):
+def get_item_info_dict(item_info_df)-> tuple[dict[int, int], dict[int, int], dict[int, float]]:
     # 对时间做归一化
     max_min_scaler = lambda x: (x - np.min(x)) / (np.max(x) - np.min(x))
     item_info_df['created_at_ts'] = item_info_df[['created_at_ts']].apply(max_min_scaler)
     # 将文章id作为key，其他属性作为value，保存成字典
     item_type_dict = dict(zip(item_info_df['click_article_id'], item_info_df['category_id']))
     item_words_dict = dict(zip(item_info_df['click_article_id'], item_info_df['words_count']))
+    # zip()作用是什么？
     item_created_time_dict = dict(zip(item_info_df['click_article_id'], item_info_df['created_at_ts']))
 
     return item_type_dict, item_words_dict, item_created_time_dict

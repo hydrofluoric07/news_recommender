@@ -17,9 +17,10 @@ from models.itemcf_recall import itemcf_sim, generate_itemcf_recall_dict, genera
 from models.usercf_recall import usercf_sim, generate_usercf_recall_dict, get_user_activate_degree_dict, u2u_embedding_sim
 from models.YouTubeDNN_torch import YouTubeDNNModel, youtubednn_u2i_dict
 from submission import submit
+from data_processing import resolve_data_path
 
 # 直接使用相对路径
-data_path = './data_raw/'
+data_path = resolve_data_path()
 cache_dir = './cache/online'  # 改为相对路径
 
 # 确保缓存目录存在

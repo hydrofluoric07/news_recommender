@@ -96,9 +96,13 @@ def item_based_recommend(user_id, user_item_time_dict, i2i_sim, sim_item_topk, r
     # 提取用户历史交互的物品ID，转为集合以加速查找
     hist_item_ids = set([x[0] for x in user_hist_items])
 
+    i2i_sim = {
+        i:sorted(related, key=lambda x:x[1], reverse=True)[:sim_item_topk]
+        for i, related in i2i_sim
+    }
     item_rank = {}
     for loc, (i, click_time) in enumerate(user_hist_items):
-        for j, wij in sorted(i2i_sim[i].items(), key=lambda x: x[1], reverse=True)[:sim_item_topk]:
+        for j, wij in i2i_sim[i].items():
             # 检查j是否在用户历史交互物品中
             if j in hist_item_ids:
                 continue
