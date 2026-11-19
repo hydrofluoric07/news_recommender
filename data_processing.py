@@ -6,6 +6,56 @@ import faiss
 import collections
 from tqdm import tqdm
 
+# === 数据 / 输出目录解析 ===
+# 所有读取函数都用 data_path + 'xxx.csv' 拼接，所以这里返回的路径必须带结尾斜杠
+_LOCAL_DATA_PATH = './data_raw/'
+_KAGGLE_DATA_CANDIDATES = [
+    '/kaggle/input/datasets/jiaweiwei0311/tianchinewsrec/',
+    '/kaggle/input/tianchinewsrec/',  # 常见挂载形式，兜底
+]
+_REQUIRED_DATA_FILES = ('train_click_log.csv', 'testA_click_log.csv', 'articles.csv')
+
+
+def _with_trailing_slash(path):
+    return path if path.endswith(('/', '\\')) else path + '/'
+
+
+def prepare_dir(path):
+    """确保目录存在，并返回带结尾斜杠的路径（便于直接拼接文件名）。"""
+    path = _with_trailing_slash(path)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def resolve_data_path(data_path=None):
+    """
+    确定数据目录，优先级：
+      1. 显式传入的 data_path
+      2. 环境变量 NEWS_DATA_PATH
+      3. 本地 ./data_raw/
+      4. Kaggle 数据集挂载点
+    返回带结尾斜杠的路径；都找不到时报错并列出尝试过的位置。
+    """
+    candidates = [
+        data_path,
+        os.environ.get('NEWS_DATA_PATH'),
+        _LOCAL_DATA_PATH,
+        *_KAGGLE_DATA_CANDIDATES,
+    ]
+    tried = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        candidate = _with_trailing_slash(candidate)
+        tried.append(candidate)
+        if all(os.path.exists(candidate + name) for name in _REQUIRED_DATA_FILES):
+            return candidate
+    raise FileNotFoundError(
+        "找不到数据目录。已尝试：\n  - " + "\n  - ".join(tried) +
+        "\n请把数据 csv 放到 ./data_raw/，或设置环境变量 NEWS_DATA_PATH 指向数据目录。"
+    )
+
+
 # debug模式：从训练集中划出一部分数据来调试代码
 def get_all_click_sample(data_path='./data_raw/', sample_nums=10000):
     """
@@ -25,11 +75,11 @@ def get_all_click_sample(data_path='./data_raw/', sample_nums=10000):
     return all_click
 
 
-# 读取点击数据，这里分成线上和线下，如果是为了获取线上提交结果应该讲测试集中的点击数据合并到总的数据中
-# 如果是为了线下验证模型的有效性或者特征的有效性，可以只使用训练集
 def get_all_click_df(data_path='./data_raw/', offline=True):
+    # 自己在本地把已有数据切出一部分当“标准答案”，跑召回或推荐，再算指标
     if offline:
         all_click = pd.read_csv(data_path + 'train_click_log.csv')
+    # 为testA生成预测
     else:
         trn_click = pd.read_csv(data_path + 'train_click_log.csv')
         tst_click = pd.read_csv(data_path + 'testA_click_log.csv')
@@ -42,7 +92,7 @@ def get_all_click_df(data_path='./data_raw/', offline=True):
 
 
 # 读取文章的基本属性
-def get_item_info_df(data_path):
+def get_item_info_df(data_path) -> pd.DataFrame:
     item_info_df = pd.read_csv(data_path + 'articles.csv')
 
     # 为了方便与训练集中的click_article_id拼接，需要把article_id修改成click_article_id
@@ -93,8 +143,10 @@ def embdding_sim(click_df, item_emb_df, save_path, topk):
     # 文章索引与文章id的字典映射
     item_idx_2_rawid_dict = dict(enumerate(item_emb_df['article_id'].values))
 
-    item_emb_cols = [x for x in item_emb_df.columns if 'emb' in x]
+    # item_emb_cols = [x for x in item_emb_df.columns if 'emb' in x]
+    item_emb_cols = item_emb_df.columns.tolist()[1:]
     item_emb_np = np.ascontiguousarray(item_emb_df[item_emb_cols].values, dtype=np.float32)
+    # axis=0对每列，axis=1对每行计算L2范数，单位化后两个向量的内积等于余弦相似度
     # 向量进行单位化
     item_emb_np = item_emb_np / np.linalg.norm(item_emb_np, axis=1, keepdims=True)
 
@@ -103,7 +155,8 @@ def embdding_sim(click_df, item_emb_df, save_path, topk):
     item_index.add(item_emb_np)
     # 相似度查询，给每个索引位置上的向量返回topk个item以及相似度
     sim, idx = item_index.search(item_emb_np, topk)  # 返回的是列表
-
+    # sim[i][j] 表示第i个查询向量与它第j个相似文章的内积值，即余弦相似度
+    # idx[i][j] 表示第i个查询向量的第j个相似文章在索引库中的行号/内部下标（范围是 0~N-1）
     # 将向量检索的结果保存成原始id的对应关系
     item_sim_dict = collections.defaultdict(dict)
     for target_idx, sim_value_list, rele_idx_list in tqdm(zip(range(len(item_emb_np)), sim, idx)):
@@ -111,8 +164,8 @@ def embdding_sim(click_df, item_emb_df, save_path, topk):
         # 从1开始是为了去掉商品本身, 所以最终获得的相似商品只有topk-1
         for rele_idx, sim_value in zip(rele_idx_list[1:], sim_value_list[1:]):
             rele_raw_id = item_idx_2_rawid_dict[rele_idx]
-            item_sim_dict[target_raw_id][rele_raw_id] = item_sim_dict.get(target_raw_id, {}).get(rele_raw_id,
-                                                                                                 0) + sim_value
+            # item_sim_dict[target_raw_id][rele_raw_id] = item_sim_dict.get(target_raw_id, {}).get(rele_raw_id,0) + sim_value
+            item_sim_dict[target_raw_id][rele_raw_id] = float(sim_value)
 
     # 保存i2i相似度矩阵
     pickle.dump(item_sim_dict, open(save_path + 'emb_i2i_sim.pkl', 'wb'))

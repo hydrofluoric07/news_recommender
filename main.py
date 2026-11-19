@@ -7,19 +7,27 @@ from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
 
-from data_processing import get_all_click_df
-from utils import get_user_item_time, get_item_topk_click
+from data_processing import (
+    get_all_click_df,
+    get_item_info_df,
+    prepare_dir,
+    resolve_data_path,
+)
+from utils import get_user_item_time_dict, get_item_topk_click, get_item_info_dict
 from models.recall_baseline import itemcf_sim, item_based_recommend, generate_user_recall_dict
 from submission import submit
-from data_processing import get_item_info_df
-from utils import  get_item_info_dict
-
-data_path = './data_raw/'
-save_path = './results/'
 
 # 用于生成线上提交的流程（train + testA）
 def main(sim_version='submit_v1', recall_version='submit_v1', use_cache=True):
+    # 路径解析：环境变量 > 本地 ./data_raw/ > Kaggle 数据集挂载点
+    data_path = resolve_data_path()
+    save_path = prepare_dir(os.environ.get('NEWS_OUTPUT_DIR', './results/'))
+    cache_dir = prepare_dir(os.environ.get('NEWS_CACHE_DIR', './cache/'))
+
     print("🚀 main() 启动，用于生成线上提交结果（train + testA）")
+    print(f"📂 数据目录：{data_path}")
+    print(f"📂 输出目录：{save_path}")
+    print(f"📂 缓存目录：{cache_dir}")
 
     # Step 1：加载点击数据（包含 train 和 testA 用户）
     all_click_df = get_all_click_df(data_path=data_path, offline=False)
@@ -31,7 +39,7 @@ def main(sim_version='submit_v1', recall_version='submit_v1', use_cache=True):
     item_info_df = get_item_info_df(data_path)
     item_created_time_dict = get_item_info_dict(item_info_df)[2]
 
-    sim_cache_file = os.path.join('cache', f'itemcf_sim_{sim_version}.pkl')
+    sim_cache_file = os.path.join(cache_dir, f'itemcf_sim_{sim_version}.pkl')
     i2i_sim = itemcf_sim(all_click_df, item_created_time_dict, save_path=sim_cache_file, use_cache=use_cache)
     print("✅ 相似度矩阵准备完成")
 
@@ -41,7 +49,7 @@ def main(sim_version='submit_v1', recall_version='submit_v1', use_cache=True):
 
     # Step 4：用户-文章时间序列
     print("📌 [Step 4] 计算用户-文章点击时间序列...")
-    user_item_time_dict = get_user_item_time(all_click_df)
+    user_item_time_dict = get_user_item_time_dict(all_click_df)
     print(f"✅ 用户-文章时间序列计算完成，共 {len(user_item_time_dict)} 个用户")
 
     # Step 5~8：召回参数配置
@@ -63,12 +71,12 @@ def main(sim_version='submit_v1', recall_version='submit_v1', use_cache=True):
     print(f"✅ 测试集用户加载完成，共 {len(tst_users_df)} 个用户")
 
     # 生成推荐缓存路径（支持版本命名）
-    recall_cache_file = os.path.join('cache', f'user_recall_items_{recall_version}.pkl')
+    recall_cache_file = os.path.join(cache_dir, f'user_recall_items_{recall_version}.pkl')
 
     # 生成推荐字典（只为 testA 用户生成）
     user_recall_items_dict = generate_user_recall_dict(
         val_df=tst_users_df,
-        user_item_time_dict=get_user_item_time(all_click_df),
+        user_item_time_dict=user_item_time_dict,
         i2i_sim=i2i_sim,
         sim_item_topk=10,
         recall_item_num=10,

@@ -15,11 +15,12 @@ from utils import (
 from data_processing import get_all_click_df, get_item_info_df, embdding_sim
 from models.itemcf_recall import itemcf_sim, generate_itemcf_recall_dict, generate_itemcf_embedding_recall_dict
 from models.usercf_recall import usercf_sim, generate_usercf_recall_dict, get_user_activate_degree_dict, u2u_embedding_sim
-from models.YouTubeDNN_torch import YouTubeDNNModel, youtubednn_u2i_dict
+from models.YouTubeDNN_torch_fast import YouTubeDNNModel, youtubednn_u2i_dict
 from submission import submit
+from data_processing import resolve_data_path
 
 # 直接使用相对路径
-data_path = './data_raw/'
+data_path = resolve_data_path()
 cache_dir = './cache/online'  # 改为相对路径
 
 # 确保缓存目录存在
@@ -289,13 +290,18 @@ def online_predict(use_cache=True, recall_num=50, epochs=10, batch_size=32, embe
     
     # Step 3: 加载并抽样 embedding，构建 embedding 相似度
     print("🚀 Step 3：加载文章 embedding 并抽样构建相似度")
-    emb_sample_n = 1000
-    item_emb_df = pd.read_csv(data_path + '/articles_emb.csv').sample(n=emb_sample_n, random_state=42)
-    emb_item_ids = set(item_emb_df['article_id'])
-    click_df_for_emb = train_df[train_df['click_article_id'].isin(emb_item_ids)]
-    
-    # embedding_sim 只用 click_df_for_emb，而不要污染主流程的 train_df
-    emb_i2i_sim = embdding_sim(click_df_for_emb, item_emb_df, save_path=cache_dir, topk=10)
+    # emb_sample_n = 1000
+    # item_emb_df = pd.read_csv(data_path + '/articles_emb.csv').sample(n=emb_sample_n, random_state=42)
+    # emb_item_ids = set(item_emb_df['article_id'])
+    # click_df_for_emb = train_df[train_df['click_article_id'].isin(emb_item_ids)]
+    # emb_i2i_sim = embdding_sim(click_df_for_emb, item_emb_df, save_path=cache_dir, topk=10)
+    # 1. 提取所有产生过真实点击的文章 ID（大约 3 万多篇）
+    clicked_item_ids = set(train_df['click_article_id']).union(set(test_df['click_article_id']))
+    # 2. 只保留这些文章的 embedding
+    item_emb_df = pd.read_csv(data_path + '/articles_emb.csv')
+    item_emb_df = item_emb_df[item_emb_df['article_id'].isin(clicked_item_ids)]
+    # 3. 对这 3 万多篇建 Faiss 索引计算相似度
+    emb_i2i_sim = embdding_sim(None, item_emb_df, save_path=cache_dir, topk=10)
     print(f"✅ Step 3：完成 embedding 相似度计算")
     
     # Step 4: 首先生成YouTubeDNN召回并提取用户嵌入
@@ -312,7 +318,8 @@ def online_predict(use_cache=True, recall_num=50, epochs=10, batch_size=32, embe
         topk=recall_num,
         epochs=epochs,
         batch_size=batch_size,
-        embedding_dim=embedding_dim
+        embedding_dim=embedding_dim,
+        use_cache=use_cache
     )
     
     # 然后加载生成的用户嵌入
@@ -392,7 +399,7 @@ def online_predict(use_cache=True, recall_num=50, epochs=10, batch_size=32, embe
     print("\n🔄 Step 4.5: 生成基于Embedding的UserCF的召回结果...")
     usercf_emb_recall_dict = generate_usercf_recall_dict(
         click_df=test_df,  # 注意这里使用test_df而不是val_df
-        user_item_time_dict=user_item_time_dict,
+        user_item_time_dict=all_user_item_time_dict, # 不使用user_item_time_dict，该字典只通过训练集生成，可能某用户的点击记录只存在于testA中但与某用户相似度极高，只基于训练集生成的字典找不到对应物品
         u2u_sim=u2u_emb_sim,
         sim_user_topk=10,
         recall_item_num=recall_num,
@@ -463,7 +470,7 @@ if __name__ == '__main__':
     use_cache = False  # 强制重新训练
     recall_num = 50   # 召回数量
     epochs = 20        # 增加训练轮数
-    batch_size = 128   # 增加批次大小
+    batch_size = 8192   # 增加批次大小
     embedding_dim = 64  # 增加嵌入维度
     
     # 检查设备

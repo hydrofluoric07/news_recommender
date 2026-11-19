@@ -282,7 +282,8 @@ def u2u_embedding_sim(click_df, user_emb_dict, save_path='./cache/', topk=20, us
         print(f"[u2u_embedding_sim] 嵌入矩阵形状: {user_embeddings.shape}")
         
         # 归一化嵌入
-        norms = np.linalg.norm(user_embeddings, axis=1, keepdims=True)
+        norms = np.linalg.norm(user_embeddings, axis=1, keepdims=True) # 计算L2范数
+        norms = np.where(norms == 0, 1.0, norms)
         user_embeddings = user_embeddings / norms
         
         # 使用Faiss进行快速相似度计算

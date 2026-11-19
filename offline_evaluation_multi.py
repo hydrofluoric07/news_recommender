@@ -1,3 +1,4 @@
+from collections import defaultdict
 import os
 import pickle
 import pandas as pd
@@ -15,11 +16,11 @@ from utils import (
 from data_processing import get_all_click_df, get_item_info_df, embdding_sim
 from models.itemcf_recall import itemcf_sim, generate_itemcf_recall_dict, generate_itemcf_embedding_recall_dict
 from models.usercf_recall import usercf_sim, generate_usercf_recall_dict, get_user_activate_degree_dict, u2u_embedding_sim
-from models.YouTubeDNN_torch import YouTubeDNNModel, youtubednn_u2i_dict
+from models.YouTubeDNN_torch_fast import YouTubeDNNModel, youtubednn_u2i_dict
 from recall_evaluation import metrics_recall
 
 
-data_path = './data_raw/'
+data_path = '/kaggle/input/datasets/jiaweiwei0311/tianchinewsrec/'
 cache_dir = './cache/offline_multi' 
 
 # 确保缓存目录存在
@@ -69,70 +70,140 @@ def metrics_mrr(user_recall_items_dict, val_df, topk=5):
     print(f"📊 最终离线 MRR@{topk}：{avg_mrr}")
     return avg_mrr
 
-def combine_recall_results(user_multi_recall_dict, weight_dict=None, topk=25, save_path='cache/'):
-    """
-    合并多路召回结果
+# def combine_recall_results(user_multi_recall_dict, weight_dict=None, topk=25, save_path='cache/'):
+#     """
+#     合并多路召回结果
     
-    Args:
-        user_multi_recall_dict: 多路召回结果字典，格式为 {召回方法: {用户ID: [(物品ID, 得分), ...]}}
-        weight_dict: 各路召回的权重字典，格式为 {召回方法: 权重值}
-        topk: 最终返回的推荐物品数量
-        save_path: 结果保存路径
+#     Args:
+#         user_multi_recall_dict: 多路召回结果字典，格式为 {召回方法: {用户ID: [(物品ID, 得分), ...]}}
+#         weight_dict: 各路召回的权重字典，格式为 {召回方法: 权重值}
+#         topk: 最终返回的推荐物品数量
+#         save_path: 结果保存路径
         
-    Returns:
-        合并后的召回结果字典，格式为 {用户ID: [(物品ID, 得分), ...]}
-    """
-    final_recall_items_dict = {}
+#     Returns:
+#         合并后的召回结果字典，格式为 {用户ID: [(物品ID, 得分), ...]}
+#     """
+#     final_recall_items_dict = {}
     
-    # 对每一种召回结果按照用户进行归一化，方便后面多种召回结果，相同用户的物品之间权重相加
-    def norm_user_recall_items_sim(sorted_item_list):
-        # 如果冷启动中没有文章或者只有一篇文章，直接返回，出现这种情况的原因可能是冷启动召回的文章数量太少了，
-        # 基于规则筛选之后就没有文章了, 这里还可以做一些其他的策略性的筛选
-        if len(sorted_item_list) < 2:
-            return sorted_item_list
+#     # 对每一种召回结果按照用户进行归一化，方便后面多种召回结果，相同用户的物品之间权重相加
+#     def norm_user_recall_items_sim(sorted_item_list):
+#         # 如果冷启动中没有文章或者只有一篇文章，直接返回，出现这种情况的原因可能是冷启动召回的文章数量太少了，
+#         # 基于规则筛选之后就没有文章了, 这里还可以做一些其他的策略性的筛选
+#         if len(sorted_item_list) < 2:
+#             return sorted_item_list
         
-        min_sim = sorted_item_list[-1][1]
-        max_sim = sorted_item_list[0][1]
+#         min_sim = sorted_item_list[-1][1]
+#         max_sim = sorted_item_list[0][1]
         
-        norm_sorted_item_list = []
-        for item, score in sorted_item_list:
-            if max_sim > 0:
-                norm_score = 1.0 * (score - min_sim) / (max_sim - min_sim) if max_sim > min_sim else 1.0
-            else:
-                norm_score = 0.0
-            norm_sorted_item_list.append((item, norm_score))
+#         norm_sorted_item_list = []
+#         for item, score in sorted_item_list:
+#             if max_sim > 0:
+#                 norm_score = 1.0 * (score - min_sim) / (max_sim - min_sim) if max_sim > min_sim else 1.0
+#             else:
+#                 norm_score = 0.0 # 没有召回使用热门物品保底情况下max_sim<0，防止负分最高的物品归一化成1.0，污染多路召回融合结果
+#             norm_sorted_item_list.append((item, norm_score))
             
-        return norm_sorted_item_list
+#         return norm_sorted_item_list
     
-    print('多路召回合并...')
-    for method, user_recall_items in tqdm(user_multi_recall_dict.items()):
-        print(method + '...')
-        # 在计算最终召回结果的时候，也可以为每一种召回结果设置一个权重
-        if weight_dict is None:
-            recall_method_weight = 1
-        else:
-            recall_method_weight = weight_dict.get(method, 1)
+#     print('多路召回合并...')
+#     for method, user_recall_items in tqdm(user_multi_recall_dict.items()):
+#         print(method + '...')
+#         # 在计算最终召回结果的时候，也可以为每一种召回结果设置一个权重
+#         if weight_dict is None:
+#             recall_method_weight = 1
+#         else:
+#             recall_method_weight = weight_dict.get(method, 1)
         
-        for user_id, sorted_item_list in user_recall_items.items(): # 进行归一化
-            user_recall_items[user_id] = norm_user_recall_items_sim(sorted_item_list)
+#         for user_id, sorted_item_list in user_recall_items.items(): # 进行归一化
+#             user_recall_items[user_id] = norm_user_recall_items_sim(sorted_item_list)
         
-        for user_id, sorted_item_list in user_recall_items.items():
-            final_recall_items_dict.setdefault(user_id, {})
-            for item, score in sorted_item_list:
-                final_recall_items_dict[user_id].setdefault(item, 0)
-                final_recall_items_dict[user_id][item] += recall_method_weight * score  
+#         for user_id, sorted_item_list in user_recall_items.items():
+#             final_recall_items_dict.setdefault(user_id, {})
+#             for item, score in sorted_item_list:
+#                 final_recall_items_dict[user_id].setdefault(item, 0)
+#                 final_recall_items_dict[user_id][item] += recall_method_weight * score  
     
-    final_recall_items_dict_rank = {}
-    # 多路召回时也可以控制最终的召回数量
-    for user, recall_item_dict in final_recall_items_dict.items():
-        final_recall_items_dict_rank[user] = sorted(recall_item_dict.items(), key=lambda x: x[1], reverse=True)[:topk]
+#     final_recall_items_dict_rank = {}
+#     # 多路召回时也可以控制最终的召回数量
+#     for user, recall_item_dict in final_recall_items_dict.items():
+#         final_recall_items_dict_rank[user] = sorted(recall_item_dict.items(), key=lambda x: x[1], reverse=True)[:topk]
 
-    # 确保保存路径存在
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+#     # 确保保存路径存在
+#     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
-    # 将多路召回后的最终结果字典保存到本地
-    with open(save_path, 'wb') as f:
-        pickle.dump(final_recall_items_dict_rank, f)
+#     # 将多路召回后的最终结果字典保存到本地
+#     with open(save_path, 'wb') as f:
+#         pickle.dump(final_recall_items_dict_rank, f)
+
+#     return final_recall_items_dict_rank
+
+def combine_recall_results(user_multi_recall_dict, weight_dict=None, topk=25, 
+                           save_path='cache/final_recall_dict.pkl', use_cache=True):
+    """
+    高效、严谨的多路召回融合（修复负分污染与单物品漏洞，消除重复遍历）
+    """
+    # 1. 缓存复用机制（避免重复耗时合并）
+    if use_cache and save_path and os.path.exists(save_path):
+        print(f"[combine_recall_results] ✅ 使用已合并的召回缓存：{save_path}")
+        with open(save_path, 'rb') as f:
+            return pickle.load(f)
+
+    # 2. 外部预置 default 字典，避免频繁 setdefault
+    final_recall_scores = defaultdict(lambda: defaultdict(float))
+    weight_dict = weight_dict or {}
+
+    print("多路召回合并优化版...")
+    for method, user_recall_items in tqdm(user_multi_recall_dict.items(), desc="合并各路召回"):
+        method_weight = weight_dict.get(method, 1.0)
+        if method_weight <= 0:
+            continue
+
+        # 单趟循环：同时完成严格归一化与加权累加（不篡改原字典）
+        for user_id, item_list in user_recall_items.items():
+            if not item_list:
+                continue
+
+            user_accumulator = final_recall_scores[user_id]
+
+            # 提取所有正分项（严格过滤兜底负分项 <= 0）
+            pos_items = [(item, score) for item, score in item_list if score > 0]
+            if not pos_items:
+                continue  # 全为兜底负分，该通道对该用户弃权
+
+            # 单元素边界处理
+            if len(pos_items) == 1:
+                user_accumulator[pos_items[0][0]] += method_weight * 1.0
+                continue
+
+            # 仅在真实正分范围内提取极值，计算 Min-Max
+            max_sim = pos_items[0][1]
+            min_sim = pos_items[-1][1]
+            diff = max_sim - min_sim
+
+            if diff > 1e-6: # 差异小于 0.000001 的物品，在业务上视为完全并列同等重要
+                # 避免得分0.5000002和0.5000001的一个变1一个变0
+                for item, score in pos_items:
+                    norm_score = (score - min_sim) / diff
+                    user_accumulator[item] += method_weight * norm_score
+            else:
+                for item, _ in pos_items:
+                    user_accumulator[item] += method_weight * 1.0
+
+    # 3. 截断 Top-K 排序
+    print(f"截取 Top-{topk} 推荐物品...")
+    final_recall_items_dict_rank = {}
+    for user_id, item_dict in final_recall_scores.items():
+        # sorted 按分数降序排列并截断
+        final_recall_items_dict_rank[user_id] = sorted(
+            item_dict.items(), key=lambda x: x[1], reverse=True
+        )[:topk]
+
+    # 4. 保存落盘
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        with open(save_path, 'wb') as f:
+            pickle.dump(final_recall_items_dict_rank, f)
+        print(f"[combine_recall_results] ✅ 合并结果已保存至：{save_path}")
 
     return final_recall_items_dict_rank
 
@@ -314,15 +385,28 @@ def get_youtube_recall(train_df, val_df, save_path, use_cache=False, epochs=10, 
 def metrics_recall_at_k(user_recall_items_dict, val_df, k):
     """计算指定k值的召回率"""
     val_user_items = dict(zip(val_df['user_id'], val_df['click_article_id']))
-    covered_users = set(user_recall_items_dict.keys()) & set(val_user_items.keys())
-    hit = 0
-    for user in covered_users:
-        true_item = val_user_items[user]
-        recall_items = [x[0] for x in user_recall_items_dict[user][:k]]
-        if true_item in recall_items:
-            hit += 1
-    recall = round(hit / len(covered_users), 5) if covered_users else 0
-    return recall
+    # covered_users = set(user_recall_items_dict.keys()) & set(val_user_items.keys())
+    covered_users = [u for u in val_df['user_id'] if u in user_recall_items_dict]
+    # hit = 0
+    
+    # for user in covered_users:
+    #     true_item = val_user_items[user]
+    #     recall_items = [x[0] for x in user_recall_items_dict[user][:k]]
+    #     if true_item in recall_items:
+    #         hit += 1
+    # recall = round(hit / len(covered_users), 5) if covered_users else 0
+    # return recall
+    n_users=len(covered_users)
+    if n_users == 0:
+        return 0.0
+    targets = np.array([val_user_items[u] for u in covered_users], dtype=np.int64)[:, None]
+    preds = np.full((n_users, k), -1, dtype=np.int64)
+    for row, u in enumerate(covered_users):
+        items = [x[0] for x in user_recall_items_dict[u][:k]]
+        preds[row, :len(items)] = items
+    hit = int(np.sum(preds == targets))
+    return round(hit / n_users, 5)
+
 
 def offline_evaluate_multi(use_cache=True, recall_num=50, epochs=10, batch_size=32, embedding_dim=32):
     print(f"\n📂 当前使用的缓存目录: {cache_dir}")
@@ -362,7 +446,7 @@ def offline_evaluate_multi(use_cache=True, recall_num=50, epochs=10, batch_size=
     # Step 3: 加载并抽样 embedding，构建 embedding 相似度
     print("🚀 Step 3：加载文章 embedding 并抽样构建相似度")
     emb_sample_n = 1000
-    item_emb_df = pd.read_csv(data_path + '/articles_emb.csv').sample(n=emb_sample_n, random_state=42)
+    item_emb_df = pd.read_csv(os.path.join(data_path, 'articles_emb.csv')).sample(n=emb_sample_n, random_state=42)
     emb_item_ids = set(item_emb_df['article_id'])
     click_df_for_emb = train_df[train_df['click_article_id'].isin(emb_item_ids)]
     
@@ -384,7 +468,8 @@ def offline_evaluate_multi(use_cache=True, recall_num=50, epochs=10, batch_size=
         topk=recall_num,
         epochs=epochs,
         batch_size=batch_size,
-        embedding_dim=embedding_dim
+        embedding_dim=embedding_dim,
+        use_cache=use_cache
     )
     
     # 然后加载生成的用户嵌入
@@ -550,10 +635,10 @@ def offline_evaluate_multi(use_cache=True, recall_num=50, epochs=10, batch_size=
 
 if __name__ == '__main__':
     # 配置参数
-    use_cache = False  # 强制重新训练
+    use_cache = True  # 强制重新训练
     recall_num = 50   # 召回数量
     epochs = 20        # 增加训练轮数
-    batch_size = 128   # 增加批次大小
+    batch_size = 2048  # 增大批次大小以吃满 GPU 并行算力
     embedding_dim = 64  # 增加嵌入维度
     
     # 检查设备

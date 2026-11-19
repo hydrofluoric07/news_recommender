@@ -1,0 +1,5 @@
+{
+    "kaggleConnector.remoteDir": "news_recommender",
+    "kaggleConnector.pathMode": "workspaceRelative",
+    "antigravity.enableInlineDiff": false
+}

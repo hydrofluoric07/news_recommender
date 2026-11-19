@@ -91,20 +91,24 @@ def item_based_recommend(user_id, user_item_time_dict, i2i_sim, sim_item_topk, r
 
     """
     # 获取用户历史交互的文章
-    user_hist_items = user_item_time_dict[user_id]
-    
+    user_hist_items = user_item_time_dict.get(user_id, [])
+
     # 提取用户历史交互的物品ID，转为集合以加速查找
-    hist_item_ids = set([x[0] for x in user_hist_items])
+    hist_item_ids = {x[0] for x in user_hist_items}
 
     item_rank = {}
     for loc, (i, click_time) in enumerate(user_hist_items):
-        for j, wij in sorted(i2i_sim[i].items(), key=lambda x: x[1], reverse=True)[:sim_item_topk]:
+        related = i2i_sim.get(i, ())
+        if isinstance(related, dict):
+            related = sorted(related.items(), key=lambda x: x[1], reverse=True)[:sim_item_topk]
+        for j, wij in related:
             # 检查j是否在用户历史交互物品中
             if j in hist_item_ids:
                 continue
 
             # 文章创建时间差权重
             created_time_weight = np.exp(0.8 ** np.abs(item_created_time_dict[i] - item_created_time_dict[j]))
+
             # 相似文章和历史点击文章序列中历史文章所在的位置权重
             loc_weight = (0.9 ** (len(user_hist_items) - loc))
 
@@ -155,12 +159,16 @@ def generate_itemcf_recall_dict(val_df,
             return pickle.load(f)
 
     print("[generate_user_recall_dict_itemcf] 🚀 正在生成 ItemCF 召回列表...")
+    i2i_sim_topk = {
+        i: sorted(related.items(), key=lambda x: x[1], reverse=True)[:sim_item_topk]
+        for i, related in i2i_sim.items()
+    }
     user_recall_items_dict = {}
     for user in tqdm(val_df['user_id'].unique()):
         rec_items = item_based_recommend(
             user,
             user_item_time_dict,
-            i2i_sim,
+            i2i_sim_topk,
             sim_item_topk,
             recall_item_num,
             item_topk_click,
@@ -199,12 +207,16 @@ def generate_itemcf_embedding_recall_dict(val_df,
             return pickle.load(f)
 
     print("[generate_user_recall_dict_embedding] 🚀 正在生成 Embedding 召回列表...")
+    emb_i2i_sim_topk = {
+        i: sorted(related.items(), key=lambda x: x[1], reverse=True)[:sim_item_topk]
+        for i, related in emb_i2i_sim.items()
+    }
     user_recall_items_dict = {}
     for user in tqdm(val_df['user_id'].unique()):
         rec_items = item_based_recommend(
             user,
             user_item_time_dict,
-            emb_i2i_sim,
+            emb_i2i_sim_topk,
             sim_item_topk,
             recall_item_num,
             item_topk_click,
